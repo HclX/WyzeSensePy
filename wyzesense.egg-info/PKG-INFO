@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: wyzesense
+Version: 0.0.1
+Summary: WyzeSense gateway library
+Home-page: https://github.com/HclX/WyzeSensePy
+Author: Xuan Xing
+Author-email: hclxing@gmail.com
+License: UNKNOWN
+Description: # WyzeSensePy
+        WyzeSensePy is a python package trying to implement the communication protocol between WyzeCamera and WyzeSense USB dongle. 
+        
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 2.7
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Description-Content-Type: text/markdown

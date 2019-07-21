@@ -1,0 +1,9 @@
+README.md
+setup.py
+wyzesense/__init__.py
+wyzesense/__main__.py
+wyzesense/gateway.py
+wyzesense.egg-info/PKG-INFO
+wyzesense.egg-info/SOURCES.txt
+wyzesense.egg-info/dependency_links.txt
+wyzesense.egg-info/top_level.txt
