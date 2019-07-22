@@ -16,11 +16,14 @@
 """
 from __future__ import print_function
 
+from builtins import input
+
 import os
 import re
 import sys
 import logging
 import errno
+import binascii
 
 from . import gateway as wyzesense
 
@@ -37,6 +40,11 @@ def main(args):
     print("Openning wyzesense gateway [%r]" % device)
     try:
         ws = wyzesense.Open(device, on_event)
+        print("Gateway info:")
+        print("\tMAC:%s" % ws.MAC)
+        print("\tVER:%s" % ws.Version)
+        print("\tENR:%s" % binascii.hexlify(ws.ENR))
+
     except IOError:
         print("No device found on path %r" % device)
         return 1
@@ -74,10 +82,10 @@ def main(args):
             'X': ('X to exit', None),
         }
 
-        for v in cmd_handlers.values():
+        for v in list(cmd_handlers.values()):
             print(v[0])
 
-        cmd_and_args = raw_input("Action:").strip().upper().split()
+        cmd_and_args = input("Action:").strip().upper().split()
         if len(cmd_and_args) == 0:
             return True
         

@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="wyzesense",
-    version="0.0.1",
+    version="0.0.2",
     author="Xuan Xing",
     author_email="hclxing@gmail.com",
     description="WyzeSense gateway library",
@@ -14,7 +14,8 @@ setuptools.setup(
     url="https://github.com/HclX/WyzeSensePy",
     packages=setuptools.find_packages(),
     classifiers=[
-        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],

@@ -1,19 +1,26 @@
+from builtins import bytes
+from builtins import str
+
 import os
 import time
+import six
 import struct
 import threading
-import select
 import datetime
 import argparse
+import binascii
 
 import logging
 log = logging.getLogger(__name__)
 
-def str_to_hex(s):
+def bytes_to_hex(s):
     if s:
-        return " ".join(["{:02x}".format(ord(x)) for x in s])
+        return binascii.hexlify(s)
     else:
         return "<None>"
+
+def checksum_from_bytes(s):
+    return sum(bytes(s)) & 0xFFFF
 
 TYPE_SYNC   = 0x43
 TYPE_ASYNC  = 0x53
@@ -52,19 +59,19 @@ class Packet(object):
     NOITFY_SYNC_TIME          = MAKE_CMD(TYPE_ASYNC, 0x32)
     NOTIFY_EVENT_LOG          = MAKE_CMD(TYPE_ASYNC, 0x35)
 
-    def __init__(self, cmd, payload = ""):
+    def __init__(self, cmd, payload = bytes()):
         self._cmd = cmd
         if self._cmd == self.ASYNC_ACK:
             assert isinstance(payload, int)
         else:
-            assert isinstance(payload, str)
+            assert isinstance(payload, bytes)
         self._payload = payload
 
     def __str__(self):
         if self._cmd == self.ASYNC_ACK:
             return "Packet: Cmd=%04X, Payload=ACK(%04X)" % (self._cmd, self._payload)
         else:
-            return "Packet: Cmd=%04X, Payload=%s" % (self._cmd, str_to_hex(self._payload))
+            return "Packet: Cmd=%04X, Payload=%s" % (self._cmd, bytes_to_hex(self._payload))
 
     @property
     def Length(self):
@@ -82,29 +89,34 @@ class Packet(object):
         return self._payload
 
     def Send(self, fd):
-        pkt = struct.pack(">HB", 0xAA55, self._cmd >> 8)
+        pkt = bytes()
+        
+        pkt += struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
             pkt += struct.pack("BB", (self._payload & 0xFF), self._cmd & 0xFF)
         else:
             pkt += struct.pack("BB", len(self._payload) + 3, self._cmd & 0xFF)
             if self._payload:
                 pkt += self._payload
-        checksum = sum([ord(c) for c in pkt]) & 0xFFFF
+
+        checksum = checksum_from_bytes(pkt)
         pkt += struct.pack(">H", checksum)
-        log.debug("Sending: %s", str_to_hex(pkt))
+        log.debug("Sending: %s", bytes_to_hex(pkt))
         ss = os.write(fd, pkt)
         assert ss == len(pkt)
 
     @classmethod
     def Parse(cls, s):
+        assert isinstance(s, bytes)
+
         if len(s) < 5:
-            log.error("Invalid packet: %s", str_to_hex(s))
+            log.error("Invalid packet: %s", bytes_to_hex(s))
             log.error("Invalid packet length: %d", len(s))
             return None
 
         magic, cmd_type, b2, cmd_id = struct.unpack_from(">HBBB", s)
         if magic != 0x55AA and magic != 0xAA55:
-            log.error("Invalid packet: %s", str_to_hex(s))
+            log.error("Invalid packet: %s", bytes_to_hex(s))
             log.error("Invalid packet magic: %4X", magic)
             return None
 
@@ -118,10 +130,10 @@ class Packet(object):
             s = s[: b2 + 4]
             payload = s[5:-2]
 
-        cs_remote = (ord(s[-2]) << 8) | ord(s[-1])
-        cs_local = sum([ord(x) for x in s[:-2]])
+        cs_remote = (s[-2] << 8) | s[-1]
+        cs_local = checksum_from_bytes(s[:-2])
         if cs_remote != cs_local:
-            log.error("Invalid packet: %s", str_to_hex(s))
+            log.error("Invalid packet: %s", bytes_to_hex(s))
             log.error("Mismatched checksum, remote=%04X, local=%04X", cs_remote, cs_local)
             return None
 
@@ -137,6 +149,8 @@ class Packet(object):
     
     @classmethod
     def GetEnr(cls, r):
+        assert isinstance(r, bytes)
+        assert len(r) == 16
         return cls(cls.CMD_GET_ENR, r)
 
     @classmethod
@@ -150,7 +164,7 @@ class Packet(object):
     @classmethod
     def EnableScan(cls, start):
         assert isinstance(start, bool)
-        return cls(cls.CMD_EANBLE_SCAN, "\x01" if start else "\x00")
+        return cls(cls.CMD_EANBLE_SCAN, b"\x01" if start else b"\x00")
 
     @classmethod
     def GetSensorCount(cls):
@@ -163,27 +177,27 @@ class Packet(object):
 
     @classmethod
     def FinishAuth(cls):
-        return cls(cls.CMD_FINISH_AUTH, "\xFF")
+        return cls(cls.CMD_FINISH_AUTH, b"\xFF")
 
     @classmethod
     def DelSensor(cls, mac):
         assert isinstance(mac, str)
         assert len(mac) == 8
-        return cls(cls.CMD_DEL_SENSOR, mac)
+        return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
     
     @classmethod
     def GetSensorR1(cls, mac, r):
+        assert isinstance(r, bytes)
         assert len(r) == 16
-        assert isinstance(r, str)
-        assert len(mac) == 8
         assert isinstance(mac, str)
-        return cls(cls.CMD_GET_SENSOR_R1, mac + r)
+        assert len(mac) == 8
+        return cls(cls.CMD_GET_SENSOR_R1, mac.encode('ascii') + r)
 
     @classmethod
     def VerifySensor(cls, mac):
-        assert len(mac) == 8
         assert isinstance(mac, str)
-        return cls(cls.CMD_VERIFY_SENSOR, mac + "\xFF\x04")
+        assert len(mac) == 8
+        return cls(cls.CMD_VERIFY_SENSOR, mac.encode('ascii') + b"\xFF\x04")
 
     @classmethod
     def UpdateCC1310(cls):
@@ -215,21 +229,21 @@ class SensorEvent(object):
 class WyzeSense(object):
     _CMD_TIMEOUT = 2
 
-    class CmdContext():
+    class CmdContext(object):
         def __init__(self, **kwargs):
             for key in kwargs:
                 setattr(self, key, kwargs[key])
 
     def _OnSensorAlarm(self, pkt):
         if len(pkt.Payload) < 18:
-            log.info("Unknown alarm packet: %s", str_to_hex(pkt.Payload))
+            log.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
-        ts, _, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
+        ts, _, mac = struct.unpack_from(">QB8s", pkt.Payload)
 
-        evt = SensorEvent(sensor_mac, datetime.datetime.fromtimestamp(ts/1000.0))
+        evt = SensorEvent(mac.decode('ascii'), datetime.datetime.fromtimestamp(ts/1000.0))
 
-        alarm_data = [ord(x) for x in pkt.Payload[17:]]
+        alarm_data = pkt.Payload[17:]
         if alarm_data[0] == 0x01:
             evt.Type = "switch"
             evt.State = "open" if alarm_data[5] == 1 else "close"
@@ -253,7 +267,7 @@ class WyzeSense(object):
         # assert msg_len + 8 == len(pkt.Payload)
         tm = datetime.datetime.fromtimestamp(ts/1000.0)
         msg = pkt.Payload[9:]
-        log.info("LOG: time=%s, data=%s", tm.isoformat(), str_to_hex(msg))
+        log.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
 
     def __init__(self, device, event_handler):
         self.__lock = threading.Lock()
@@ -275,18 +289,19 @@ class WyzeSense(object):
         try:
             s = os.read(self.__fd, 0x40)
         except OSError:
-            return ""
+            return b""
 
         if not s:
             log.info("Nothing read")
-            return ""
+            return b""
 
-        length = ord(s[0])
+        s = bytes(s)
+        length = s[0]
         assert length > 0
         if length > 0x3F:
             length = 0x3F
 
-        #log.debug("Raw HID packet: %s", str_to_hex(s))
+        #log.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
         return s[1: 1 + length]
 
@@ -298,14 +313,14 @@ class WyzeSense(object):
         return oldHandler
 
     def _SendPacket(self, pkt):
-        log.info("===> Sending: %s", str(pkt))
+        log.debug("===> Sending: %s", str(pkt))
         pkt.Send(self.__fd)
 
     def _DefaultHandler(self, pkt):
         pass
 
     def _HandlePacket(self, pkt):
-        log.info("<=== Received: %s", str(pkt))
+        log.debug("<=== Received: %s", str(pkt))
         with self.__lock:
             handler = self.__handlers.get(pkt.Cmd, self._DefaultHandler)
         
@@ -315,27 +330,27 @@ class WyzeSense(object):
         handler(pkt)
 
     def _Worker(self):
-        s = ""
+        s = b""
         while True:
             if self.__exit_event.isSet():
                 break
             
             s += self._ReadRawHID()
             #if s:
-            #    log.info("Incoming buffer: %s", str_to_hex(s))
-            start = s.find("\x55\xAA")
+            #    log.info("Incoming buffer: %s", bytes_to_hex(s))
+            start = s.find(b"\x55\xAA")
             if start == -1:
                 time.sleep(0.1)
                 continue
 
             s = s[start:]
-            log.debug("Trying to parse: %s", str_to_hex(s))
+            log.debug("Trying to parse: %s", bytes_to_hex(s))
             pkt = Packet.Parse(s)
             if not pkt:
                 s = s[2:]
                 continue
 
-            log.debug("Received: %s", str_to_hex(s[:pkt.Length]))
+            log.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
             s = s[pkt.Length:]
             self._HandlePacket(pkt)
 
@@ -366,15 +381,15 @@ class WyzeSense(object):
             return None
 
         assert len(resp.Payload) == 1
-        result = ord(resp.Payload[0])
+        result = resp.Payload[0]
         log.debug("Inquiry returns %d", result)
         return result
 
     def _GetEnr(self, r):
         log.debug("Start GetEnr...")
         assert len(r) == 4
-        assert all(isinstance(x,  (int, long)) for x in r)
-        r_string = struct.pack("<LLLL", *r)
+        assert all(isinstance(x,  int) for x in r)
+        r_string = bytes(struct.pack("<LLLL", *r))
 
         resp = self._DoSimpleCommand(Packet.GetEnr(r_string))
         if not resp:
@@ -382,7 +397,7 @@ class WyzeSense(object):
             return None
 
         assert len(resp.Payload) == 16
-        log.debug("GetEnr returns %s", str_to_hex(resp.Payload))
+        log.debug("GetEnr returns %s", bytes_to_hex(resp.Payload))
         return resp.Payload
 
     def _GetMac(self):
@@ -393,8 +408,9 @@ class WyzeSense(object):
             return None
 
         assert len(resp.Payload) == 8
-        log.debug("GetMAC returns %s", resp.Payload)
-        return resp.Payload
+        mac = resp.Payload.decode('ascii')
+        log.debug("GetMAC returns %s", mac)
+        return mac
     
     def _GetKey(self):
         log.debug("Start GetKey...")
@@ -414,8 +430,9 @@ class WyzeSense(object):
             log.debug("GetVersion timed out...")
             return None
 
-        log.debug("GetVersion returns %s", resp.Payload)
-        return resp.Payload
+        version = resp.Payload.decode('ascii')
+        log.debug("GetVersion returns %s", version)
+        return version
 
     def _GetSensors(self):
         log.debug("Start GetSensors...")
@@ -426,16 +443,17 @@ class WyzeSense(object):
             return None
 
         assert len(resp.Payload) == 1
-        count = ord(resp.Payload[0])
+        count = resp.Payload[0]
 
         ctx = self.CmdContext(count=count, index=0, sensors=[])
         if count > 0:
             log.debug("%d sensors reported, waiting for each one to report...", count)
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
-                log.debug("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, pkt.Payload)
+                mac = pkt.Payload.decode('ascii')
+                log.debug("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
 
-                ctx.sensors.append(pkt.Payload)
+                ctx.sensors.append(mac)
                 ctx.index += 1
                 if ctx.index == ctx.count:
                     e.set()
@@ -504,7 +522,7 @@ class WyzeSense(object):
         ctx = self.CmdContext(evt=threading.Event(), result=None)
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
-            ctx.result = (pkt.Payload[1:9], ord(pkt.Payload[9]), ord(pkt.Payload[10]))
+            ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
         
         oldHandler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
@@ -516,7 +534,7 @@ class WyzeSense(object):
         if ctx.evt.wait(timeout):
             s_mac, s_type, s_ver = ctx.result
             log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-            res = self._DoSimpleCommand(Packet.GetSensorR1(s_mac, 'Ok5HPNQ4lf77u754'))
+            res = self._DoSimpleCommand(Packet.GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754'))
             if not res:
                 log.debug("GetSensorR1 timeout...")
         else:
@@ -535,15 +553,15 @@ class WyzeSense(object):
         return (s_mac, s_type, s_ver)
 
     def Delete(self, mac):
-        resp = self._DoSimpleCommand(Packet.DelSensor(mac))
+        resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
         if not resp:
             log.debug("CmdDelSensor timed out...")
             return False
 
-        log.debug("CmdDelSensor returns %s", str_to_hex(resp.Payload))
+        log.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
-        ack_mac = resp.Payload[:8]
-        ack_code = ord(resp.Payload[8])
+        ack_mac = resp.Payload[:8].decode('ascii')
+        ack_code = resp.Payload[8]
         if ack_mac != mac:
             log.debug("CmdDelSensor: MAC mismatch, requested:%s, returned:%s", mac, ack_mac)
             return False
