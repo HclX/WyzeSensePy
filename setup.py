@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="wyzesense",
-    version="0.0.2",
+    version="0.0.3",
     author="Xuan Xing",
     author_email="hclxing@gmail.com",
     description="WyzeSense gateway library",

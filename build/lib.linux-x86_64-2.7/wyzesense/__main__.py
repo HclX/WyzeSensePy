@@ -25,7 +25,7 @@ import logging
 import errno
 import binascii
 
-import gateway
+from . import gateway as wyzesense
 
 def on_event(ws, event):
     print("Event: %s" % event)
