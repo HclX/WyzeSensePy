@@ -216,15 +216,22 @@ class Packet(object):
         assert (cmd >> 0x8) == TYPE_ASYNC
         return cls(cls.ASYNC_ACK, cmd)
 
-class SensorEvent(object):
-    def __init__(self, mac, timestamp):
+class BaseEvent(object):
+    def __init__(self, mac, timestamp, event_data):
         self.MAC = mac
         self.Timestamp = timestamp
-
+        self.Data = event_data
+    
     def __str__(self):
-        return "[%s][%s]type=%s, state=%s, battery=%d%%, signal=%d" % (
-            self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC,
-            self.Type, self.State, self.BatteryLevel, self.SignalStrength)
+        return "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
+
+class RawEvent(BaseEvent):
+    def __str__(self):
+        return super(RawEvent, self).__str__() + "event_type=%02X, data=%r" % self.Data
+
+class StateEvent(BaseEvent):
+    def __str__(self):
+        return super(StateEvent, self).__str__() + "sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
 
 class WyzeSense(object):
     _CMD_TIMEOUT = 2
@@ -239,24 +246,25 @@ class WyzeSense(object):
             log.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
-        ts, _, mac = struct.unpack_from(">QB8s", pkt.Payload)
-
-        evt = SensorEvent(mac.decode('ascii'), datetime.datetime.fromtimestamp(ts/1000.0))
-
+        timestamp, event_type, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
+        timestamp = datetime.datetime.fromtimestamp(timestamp/1000.0)
+        sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
-        if alarm_data[0] == 0x01:
-            evt.Type = "switch"
-            evt.State = "open" if alarm_data[5] == 1 else "close"
-        elif alarm_data[0] == 0x02:
-            evt.Type = "motion"
-            evt.State = "active" if alarm_data[5] == 1 else "inactive"
+        if event_type == 0xA2:
+            if alarm_data[0] == 0x01:
+                sensor_type = "switch"
+                sensor_state = "open" if alarm_data[5] == 1 else "close"
+            elif alarm_data[0] == 0x02:
+                sensor_type = "motion"
+                sensor_state = "active" if alarm_data[5] == 1 else "inactive"
+            else:
+                sesor_type = "uknown"
+                sensor_state = "unknown"
+            e = StateEvent(sensor_mac, timestamp, (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
-            evt.Type = "uknown"
-            evt.State = "unknown"
+            e = RawEvent(sensor_mac, timestamp, (event_type, alarm_data))
 
-        evt.BatteryLevel = alarm_data[2]
-        evt.SignalStrength = alarm_data[8]
-        self.__on_event(self, evt)
+        self.__on_event(self, e)
 
     def _OnSyncTime(self, pkt):
         self._SendPacket(Packet.SyncTimeAck())
