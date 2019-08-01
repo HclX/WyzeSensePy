@@ -27,9 +27,13 @@ import binascii
 
 from . import gateway as wyzesense
 
-def on_event(ws, event):
-    print("Event: %s" % event)
-    logging.debug("Event: %s", event)
+def on_event(ws, e):
+    s = "[%s][%s]" % (e.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), e.MAC)
+    if e.Type == 'state':
+        s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % e.Data
+    else:
+        s += "RawEvent: type=%s, data=%r" % (e.Type, e.Data)
+    print(s)
 
 def main(args):
     if args['--debug']:
@@ -78,12 +82,9 @@ def main(args):
 
             print("Un-pairing sensor %s:" % mac)
             logging.debug("Un-pairing sensor %s:", mac)
-            if ws.Delete(mac):
-                print("Sensor %s removed" % mac)
-                logging.debug("Sensor %s removed", mac)
-            else:
-                print("Failed to remove sensor %s" % mac)
-                logging.debug("Failed to remove sensor %s", mac)
+            ws.Delete(mac)
+            print("Sensor %s removed" % mac)
+            logging.debug("Sensor %s removed", mac)
 
     def HandleCmd():
         cmd_handlers = {

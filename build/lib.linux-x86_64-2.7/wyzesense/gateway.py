@@ -46,7 +46,7 @@ class Packet(object):
     # Commands initiated from dongle side
     CMD_FINISH_AUTH           = MAKE_CMD(TYPE_ASYNC, 0x14)
     CMD_GET_DONGLE_VERSION    = MAKE_CMD(TYPE_ASYNC, 0x16)
-    CMD_EANBLE_SCAN           = MAKE_CMD(TYPE_ASYNC, 0x1C)
+    CMD_START_STOP_SCAN       = MAKE_CMD(TYPE_ASYNC, 0x1C)
     CMD_GET_SENSOR_R1         = MAKE_CMD(TYPE_ASYNC, 0x21)
     CMD_VERIFY_SENSOR         = MAKE_CMD(TYPE_ASYNC, 0x23)
     CMD_DEL_SENSOR            = MAKE_CMD(TYPE_ASYNC, 0x25)
@@ -162,9 +162,12 @@ class Packet(object):
         return cls(cls.CMD_GET_KEY)
 
     @classmethod
-    def EnableScan(cls, start):
-        assert isinstance(start, bool)
-        return cls(cls.CMD_EANBLE_SCAN, b"\x01" if start else b"\x00")
+    def EnableScan(cls):
+        return cls(cls.CMD_START_STOP_SCAN, b"\x01")
+
+    @classmethod
+    def DisableScan(cls):
+        return cls(cls.CMD_START_STOP_SCAN, b"\x00")
 
     @classmethod
     def GetSensorCount(cls):
@@ -216,24 +219,22 @@ class Packet(object):
         assert (cmd >> 0x8) == TYPE_ASYNC
         return cls(cls.ASYNC_ACK, cmd)
 
-class BaseEvent(object):
-    def __init__(self, mac, timestamp, event_data):
+class SensorEvent(object):
+    def __init__(self, mac, timestamp, event_type, event_data):
         self.MAC = mac
         self.Timestamp = timestamp
+        self.Type = event_type
         self.Data = event_data
     
     def __str__(self):
-        return "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
+        s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
+        if self.Type == 'state':
+            s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        else:
+            s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
+        return s
 
-class RawEvent(BaseEvent):
-    def __str__(self):
-        return super(RawEvent, self).__str__() + "event_type=%02X, data=%r" % self.Data
-
-class StateEvent(BaseEvent):
-    def __str__(self):
-        return super(StateEvent, self).__str__() + "sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
-
-class WyzeSense(object):
+class Dongle(object):
     _CMD_TIMEOUT = 2
 
     class CmdContext(object):
@@ -260,9 +261,9 @@ class WyzeSense(object):
             else:
                 sesor_type = "uknown"
                 sensor_state = "unknown"
-            e = StateEvent(sensor_mac, timestamp, (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
-            e = RawEvent(sensor_mac, timestamp, (event_type, alarm_data))
+            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
 
         self.__on_event(self, e)
 
@@ -291,7 +292,7 @@ class WyzeSense(object):
             Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
         }
 
-        self.__thread.start()
+        self._Start()
 
     def _ReadRawHID(self):
         try:
@@ -369,7 +370,8 @@ class WyzeSense(object):
         result = e.wait(timeout)
         self._SetHandler(pkt.Cmd + 1, oldHandler)
 
-        return result
+        if not result:
+            raise TimeoutError("_DoCommand")
 
     def _DoSimpleCommand(self, pkt, timeout=_CMD_TIMEOUT):
         ctx = self.CmdContext(result = None)
@@ -384,14 +386,12 @@ class WyzeSense(object):
     def _Inquiry(self):
         log.debug("Start Inquiry...")
         resp = self._DoSimpleCommand(Packet.Inquiry())
-        if not resp:
-            log.debug("Inquiry timed out...")
-            return None
 
         assert len(resp.Payload) == 1
         result = resp.Payload[0]
         log.debug("Inquiry returns %d", result)
-        return result
+
+        assert result == 1, "Inquiry failed, result=%d" % result
 
     def _GetEnr(self, r):
         log.debug("Start GetEnr...")
@@ -400,10 +400,6 @@ class WyzeSense(object):
         r_string = bytes(struct.pack("<LLLL", *r))
 
         resp = self._DoSimpleCommand(Packet.GetEnr(r_string))
-        if not resp:
-            log.debug("GetEnr timed out...")
-            return None
-
         assert len(resp.Payload) == 16
         log.debug("GetEnr returns %s", bytes_to_hex(resp.Payload))
         return resp.Payload
@@ -411,10 +407,6 @@ class WyzeSense(object):
     def _GetMac(self):
         log.debug("Start GetMAC...")
         resp = self._DoSimpleCommand(Packet.GetMAC())
-        if not resp:
-            log.debug("GetMac timed out...")
-            return None
-
         assert len(resp.Payload) == 8
         mac = resp.Payload.decode('ascii')
         log.debug("GetMAC returns %s", mac)
@@ -423,10 +415,6 @@ class WyzeSense(object):
     def _GetKey(self):
         log.debug("Start GetKey...")
         resp = self._DoSimpleCommand(Packet.GetKey())
-        if not resp:
-            log.debug("GetKey timed out...")
-            return None
-
         assert len(resp.Payload) == 16
         log.debug("GetKey returns %s", resp.Payload)
         return resp.Payload
@@ -434,28 +422,40 @@ class WyzeSense(object):
     def _GetVersion(self):
         log.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
-        if not resp:
-            log.debug("GetVersion timed out...")
-            return None
-
         version = resp.Payload.decode('ascii')
         log.debug("GetVersion returns %s", version)
         return version
+
+    def _GetSensorR1(self, mac, r1):
+        log.debug("Start GetSensorR1...")
+        resp = self._DoSimpleCommand(Packet.GetSensorR1(mac, r1))
+        return resp.Payload
+
+    def _EnableScan(self):
+        log.debug("Start EnableScan...")
+        resp = self._DoSimpleCommand(Packet.EnableScan())
+        assert len(resp.Payload) == 1
+        result = resp.Payload[0]
+        assert result == 0x01, "EnableScan failed, result=%d"
+
+    def _DisableScan(self):
+        log.debug("Start DisableScan...")
+        resp = self._DoSimpleCommand(Packet.DisableScan())
+        assert len(resp.Payload) == 1
+        result = resp.Payload[0]
+        assert result == 0x01, "DisableScan failed, result=%d"
 
     def _GetSensors(self):
         log.debug("Start GetSensors...")
 
         resp = self._DoSimpleCommand(Packet.GetSensorCount())
-        if not resp:
-            log.debug("GetSensorCount timed out...")
-            return None
-
         assert len(resp.Payload) == 1
         count = resp.Payload[0]
 
         ctx = self.CmdContext(count=count, index=0, sensors=[])
         if count > 0:
             log.debug("%d sensors reported, waiting for each one to report...", count)
+
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
                 mac = pkt.Payload.decode('ascii')
@@ -466,50 +466,32 @@ class WyzeSense(object):
                 if ctx.index == ctx.count:
                     e.set()
 
-            if not self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=self._CMD_TIMEOUT * count):
-                log.debug("GetSensorList timed out...")
-                return None
+            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=self._CMD_TIMEOUT * count)
         else:
             log.debug("No sensors bond yet...")
         return ctx.sensors
 
     def _FinishAuth(self):
         resp = self._DoSimpleCommand(Packet.FinishAuth())
-        if not resp:
-            log.debug("FinishAuth timed out...")
-            return False
-        
-        return True
+        assert len(resp.Payload) == 0
 
-    def Start(self):
-        res = self._Inquiry()
-        if not res:
-            log.error("Inquiry failed")
-            return False
+    def _Start(self):
+        self.__thread.start()
 
-        self.ENR = self._GetEnr([0x30303030] * 4)
-        if not self.ENR:
-            log.error("GetEnr failed")
-            return False
-        
-        self.MAC = self._GetMac()
-        if not self.MAC:
-            log.error("GetMAC failed")
-            return False
-        log.debug("Dongle MAC is [%s]", self.MAC)
+        try:
+            self._Inquiry()
 
-        res = self._GetVersion()
-        if not res:
-            log.error("GetVersion failed")
-            return False
-        self.Version = res
-        log.debug("Dongle version: %s", self.Version)
+            self.ENR = self._GetEnr([0x30303030] * 4)
+            self.MAC = self._GetMac()
+            log.debug("Dongle MAC is [%s]", self.MAC)
 
-        res = self._FinishAuth()
-        if not res:
-            log.error("FinishAuth failed")
-            return False
-        return True
+            self.Version = self._GetVersion()
+            log.debug("Dongle version: %s", self.Version)
+
+            self._FinishAuth()
+        except:
+            self.Stop()
+            raise
 
     def List(self):
         sensors = self._GetSensors()
@@ -518,11 +500,11 @@ class WyzeSense(object):
 
         return sensors
 
-    def Stop(self):
+    def Stop(self, timeout=_CMD_TIMEOUT):
         self.__exit_event.set()
         os.close(self.__fd)
         self.__fd = None
-        self.__thread.join()
+        self.__thread.join(timeout)
 
     def Scan(self, timeout=60):
         log.debug("Start Scan...")
@@ -533,57 +515,37 @@ class WyzeSense(object):
             ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
         
-        oldHandler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
-        res = self._DoSimpleCommand(Packet.EnableScan(True))
-        if not res:
-            log.debug("EnableScan timed out...")
-            return None
+        old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
+        try:
+            self._DoSimpleCommand(Packet.EnableScan())
 
-        if ctx.evt.wait(timeout):
-            s_mac, s_type, s_ver = ctx.result
-            log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-            res = self._DoSimpleCommand(Packet.GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754'))
-            if not res:
-                log.debug("GetSensorR1 timeout...")
-        else:
-            log.debug("Sensor discovery timeout...")
 
-        res = self._DoSimpleCommand(Packet.EnableScan(False))
-        if not res:
-            log.debug("EnableScan timedout...")
+            if ctx.evt.wait(timeout):
+                s_mac, s_type, s_ver = ctx.result
+                log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
+                r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
+                log.debug("Sensor R1: %r", bytes_to_hex(r1))
+            else:
+                log.debug("Sensor discovery timeout...")
 
+            self._DoSimpleCommand(Packet.DisableScan())
+        finally:
+            self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, old_handler)
         if ctx.result:
             s_mac, s_type, s_ver = ctx.result
-            res = self._DoSimpleCommand(Packet.VerifySensor(s_mac))
-            if not res:
-                log.debug("VerifySensor timeout...")
-        
-        return (s_mac, s_type, s_ver)
+            self._DoSimpleCommand(Packet.VerifySensor(s_mac))
+        return ctx.result
 
     def Delete(self, mac):
         resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
-        if not resp:
-            log.debug("CmdDelSensor timed out...")
-            return False
-
         log.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
         ack_mac = resp.Payload[:8].decode('ascii')
         ack_code = resp.Payload[8]
-        if ack_mac != mac:
-            log.debug("CmdDelSensor: MAC mismatch, requested:%s, returned:%s", mac, ack_mac)
-            return False
-
-        if ack_code != 0xFF:
-            log.debug("CmdDelSensor: Unexpected ACK code: %02X", ack_code)
-            return False
-
+        assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
+        assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)
         log.debug("CmdDelSensor: %s deleted", mac)
-        return True
+
 
 def Open(device, event_handler):
-    ws = WyzeSense(device, event_handler)
-    if ws.Start():
-        return ws
-    else:
-        return None
+    return Dongle(device, event_handler)

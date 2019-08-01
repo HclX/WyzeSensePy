@@ -28,8 +28,13 @@ import errno
 import binascii
 import wyzesense
 
-def on_event(ws, event):
-    print("Event: %s" % event)
+def on_event(ws, e):
+    s = "[%s][%s]" % (e.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), e.MAC)
+    if e.Type == 'state':
+        s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % e.Data
+    else:
+        s += "RawEvent: type=%s, data=%r" % (e.Type, e.Data)
+    print(s)
 
 def main(args):
     if args['--debug']:
@@ -41,39 +46,46 @@ def main(args):
     print("Openning wyzesense gateway [%r]" % device)
     try:
         ws = wyzesense.Open(device, on_event)
+        if not ws:
+            print("Open wyzesense gateway failed")
+            return 1
         print("Gateway info:")
         print("\tMAC:%s" % ws.MAC)
         print("\tVER:%s" % ws.Version)
         print("\tENR:%s" % binascii.hexlify(ws.ENR))
-
     except IOError:
         print("No device found on path %r" % device)
-        return 1
+        return 2
     
     def List(unused_args):
         result = ws.List()
         print("%d sensor paired:" % len(result))
+        logging.debug("%d sensor paired:", len(result))
         for mac in result:
             print("\tSensor: %s" % mac)
+            logging.debug("\tSensor: %s", mac)
 
     def Pair(unused_args):
         result = ws.Scan()
         if result:
             print("Sensor found: mac=%s, type=%d, version=%d" % result)
+            logging.debug("Sensor found: mac=%s, type=%d, version=%d", *result)
         else:
             print("No sensor found!")
+            logging.debug("No sensor found!")
 
     def Unpair(mac_list):
         for mac in mac_list:
             if len(mac) != 8:
                 print("Invalid mac address, must be 8 characters: %s", mac)
+                logging.debug("Invalid mac address, must be 8 characters: %s", mac)
                 continue
 
             print("Un-pairing sensor %s:" % mac)
-            if ws.Delete(mac):
-                print("Sensor %s removed" % mac)
-            else:
-                print("Failed to remove sensor %s" % mac)
+            logging.debug("Un-pairing sensor %s:", mac)
+            ws.Delete(mac)
+            print("Sensor %s removed" % mac)
+            logging.debug("Sensor %s removed", mac)
 
     def HandleCmd():
         cmd_handlers = {
@@ -110,7 +122,7 @@ def main(args):
     return 0
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(relativeCreated)d ms [%(name)s] %(message)s')
+    logging.basicConfig(format='%(levelname)s %(asctime)s %(message)s')
 
     try:
         from docopt import docopt

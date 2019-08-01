@@ -219,20 +219,22 @@ class Packet(object):
         assert (cmd >> 0x8) == TYPE_ASYNC
         return cls(cls.ASYNC_ACK, cmd)
 
-class SensorEvent(object):
-    def __init__(self, mac, timestamp, event_type, event_data):
+class BaseEvent(object):
+    def __init__(self, mac, timestamp, event_data):
         self.MAC = mac
         self.Timestamp = timestamp
-        self.Type = event_type
         self.Data = event_data
     
     def __str__(self):
-        s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
-        if self.Type == 'state':
-            s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
-        else:
-            s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
-        return s
+        return "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
+
+class RawEvent(BaseEvent):
+    def __str__(self):
+        return super(RawEvent, self).__str__() + "event_type=%02X, data=%r" % self.Data
+
+class StateEvent(BaseEvent):
+    def __str__(self):
+        return super(StateEvent, self).__str__() + "sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
 
 class Dongle(object):
     _CMD_TIMEOUT = 2
@@ -261,9 +263,9 @@ class Dongle(object):
             else:
                 sesor_type = "uknown"
                 sensor_state = "unknown"
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            e = StateEvent(sensor_mac, timestamp, (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
-            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
+            e = RawEvent(sensor_mac, timestamp, (event_type, alarm_data))
 
         self.__on_event(self, e)
 
@@ -429,6 +431,7 @@ class Dongle(object):
     def _GetSensorR1(self, mac, r1):
         log.debug("Start GetSensorR1...")
         resp = self._DoSimpleCommand(Packet.GetSensorR1(mac, r1))
+        assert len(resp.Payload) == 16
         return resp.Payload
 
     def _EnableScan(self):
@@ -473,7 +476,9 @@ class Dongle(object):
 
     def _FinishAuth(self):
         resp = self._DoSimpleCommand(Packet.FinishAuth())
-        assert len(resp.Payload) == 0
+        assert len(resp.Payload) == 1
+        result = resp.Payload[0]
+        assert result == 0x01, "FinishAuth failed, result=%d" % result
 
     def _Start(self):
         self.__thread.start()
@@ -500,7 +505,7 @@ class Dongle(object):
 
         return sensors
 
-    def Stop(self, timeout=_CMD_TIMEOUT):
+    def Stop(self, timeout = self._CMD_TIMEOUT):
         self.__exit_event.set()
         os.close(self.__fd)
         self.__fd = None
@@ -523,8 +528,8 @@ class Dongle(object):
             if ctx.evt.wait(timeout):
                 s_mac, s_type, s_ver = ctx.result
                 log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-                r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
-                log.debug("Sensor R1: %r", bytes_to_hex(r1))
+                res = self._DoSimpleCommand(Packet.GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754'))
+                log.debug("Sensor R1: %r", res)
             else:
                 log.debug("Sensor discovery timeout...")
 
@@ -544,6 +549,7 @@ class Dongle(object):
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
         assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)
+
         log.debug("CmdDelSensor: %s deleted", mac)
 
 
