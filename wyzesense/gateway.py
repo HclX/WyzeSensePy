@@ -125,10 +125,12 @@ class Packet(object):
             assert len(s) >= 7
             s = s[:7]
             payload = MAKE_CMD(cmd_type, b2)
-        else:
-            assert len(s) >= b2 + 4
+        elif len(s) >= b2 + 4:
             s = s[: b2 + 4]
             payload = s[5:-2]
+        else:
+            log.error("Invalid packet: %s", bytes_to_hex(s))
+            return None
 
         cs_remote = (s[-2] << 8) | s[-1]
         cs_local = checksum_from_bytes(s[:-2])
@@ -259,7 +261,7 @@ class Dongle(object):
                 sensor_type = "motion"
                 sensor_state = "active" if alarm_data[5] == 1 else "inactive"
             else:
-                sesor_type = "uknown"
+                sensor_type = "uknown"
                 sensor_state = "unknown"
             e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
