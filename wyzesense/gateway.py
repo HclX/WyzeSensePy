@@ -265,6 +265,13 @@ class Dongle(object):
                 sensor_type = "unknown"
                 sensor_state = "unknown"
             e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+        elif event_type == 0xE8:
+            if alarm_data[0] == 0x03:
+                # alarm_data[7] might be humidity in some form, but as an integer
+                # is reporting way to high to actually be humidity.
+                sensor_type = "leak:temperature"
+                sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
+            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
 
