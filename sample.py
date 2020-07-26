@@ -20,13 +20,12 @@ from __future__ import print_function
 
 from builtins import input
 
-import os
 import re
 import sys
 import logging
-import errno
 import binascii
 import wyzesense
+
 
 def on_event(ws, e):
     s = "[%s][%s]" % (e.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), e.MAC)
@@ -35,6 +34,7 @@ def on_event(ws, e):
     else:
         s += "RawEvent: type=%s, data=%r" % (e.Type, e.Data)
     print(s)
+
 
 def main(args):
     if args['--debug']:
@@ -56,7 +56,7 @@ def main(args):
     except IOError:
         print("No device found on path %r" % device)
         return 2
-    
+
     def List(unused_args):
         result = ws.List()
         print("%d sensor paired:" % len(result))
@@ -101,7 +101,7 @@ def main(args):
         cmd_and_args = input("Action:").strip().upper().split()
         if len(cmd_and_args) == 0:
             return True
-        
+
         cmd = cmd_and_args[0]
         if cmd not in cmd_handlers:
             return True
@@ -109,7 +109,7 @@ def main(args):
         handler = cmd_handlers[cmd]
         if not handler[1]:
             return False
-        
+
         handler[1](cmd_and_args[1:])
         return True
 
@@ -120,6 +120,7 @@ def main(args):
         ws.Stop()
 
     return 0
+
 
 if __name__ == '__main__':
     logging.basicConfig(format='%(levelname)s %(asctime)s %(message)s')
