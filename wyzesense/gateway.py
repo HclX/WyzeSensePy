@@ -3,15 +3,14 @@ from builtins import str
 
 import os
 import time
-import six
 import struct
 import threading
 import datetime
-import argparse
 import binascii
 
 import logging
 log = logging.getLogger(__name__)
+
 
 def bytes_to_hex(s):
     if s:
@@ -19,47 +18,51 @@ def bytes_to_hex(s):
     else:
         return "<None>"
 
+
 def checksum_from_bytes(s):
     return sum(bytes(s)) & 0xFFFF
 
-TYPE_SYNC   = 0x43
-TYPE_ASYNC  = 0x53
+
+TYPE_SYNC = 0x43
+TYPE_ASYNC = 0x53
+
 
 def MAKE_CMD(type, cmd):
     return (type << 8) | cmd
+
 
 class Packet(object):
     _CMD_TIMEOUT = 5
 
     # Sync packets:
     # Commands initiated from host side
-    CMD_GET_ENR               = MAKE_CMD(TYPE_SYNC, 0x02)
-    CMD_GET_MAC               = MAKE_CMD(TYPE_SYNC, 0x04)
-    CMD_GET_KEY               = MAKE_CMD(TYPE_SYNC, 0x06)
-    CMD_INQUIRY               = MAKE_CMD(TYPE_SYNC, 0x27)
-    CMD_UPDATE_CC1310         = MAKE_CMD(TYPE_SYNC, 0x12)
-    CMD_SET_CH554_UPGRADE     = MAKE_CMD(TYPE_SYNC, 0x0E)
+    CMD_GET_ENR = MAKE_CMD(TYPE_SYNC, 0x02)
+    CMD_GET_MAC = MAKE_CMD(TYPE_SYNC, 0x04)
+    CMD_GET_KEY = MAKE_CMD(TYPE_SYNC, 0x06)
+    CMD_INQUIRY = MAKE_CMD(TYPE_SYNC, 0x27)
+    CMD_UPDATE_CC1310 = MAKE_CMD(TYPE_SYNC, 0x12)
+    CMD_SET_CH554_UPGRADE = MAKE_CMD(TYPE_SYNC, 0x0E)
 
     # Async packets:
-    ASYNC_ACK                 = MAKE_CMD(TYPE_ASYNC, 0xFF)
+    ASYNC_ACK = MAKE_CMD(TYPE_ASYNC, 0xFF)
 
     # Commands initiated from dongle side
-    CMD_FINISH_AUTH           = MAKE_CMD(TYPE_ASYNC, 0x14)
-    CMD_GET_DONGLE_VERSION    = MAKE_CMD(TYPE_ASYNC, 0x16)
-    CMD_START_STOP_SCAN       = MAKE_CMD(TYPE_ASYNC, 0x1C)
-    CMD_GET_SENSOR_R1         = MAKE_CMD(TYPE_ASYNC, 0x21)
-    CMD_VERIFY_SENSOR         = MAKE_CMD(TYPE_ASYNC, 0x23)
-    CMD_DEL_SENSOR            = MAKE_CMD(TYPE_ASYNC, 0x25)
-    CMD_GET_SENSOR_COUNT      = MAKE_CMD(TYPE_ASYNC, 0x2E)
-    CMD_GET_SENSOR_LIST       = MAKE_CMD(TYPE_ASYNC, 0x30)
+    CMD_FINISH_AUTH = MAKE_CMD(TYPE_ASYNC, 0x14)
+    CMD_GET_DONGLE_VERSION = MAKE_CMD(TYPE_ASYNC, 0x16)
+    CMD_START_STOP_SCAN = MAKE_CMD(TYPE_ASYNC, 0x1C)
+    CMD_GET_SENSOR_R1 = MAKE_CMD(TYPE_ASYNC, 0x21)
+    CMD_VERIFY_SENSOR = MAKE_CMD(TYPE_ASYNC, 0x23)
+    CMD_DEL_SENSOR = MAKE_CMD(TYPE_ASYNC, 0x25)
+    CMD_GET_SENSOR_COUNT = MAKE_CMD(TYPE_ASYNC, 0x2E)
+    CMD_GET_SENSOR_LIST = MAKE_CMD(TYPE_ASYNC, 0x30)
 
     # Notifications initiated from dongle side
-    NOTIFY_SENSOR_ALARM       = MAKE_CMD(TYPE_ASYNC, 0x19)
-    NOTIFY_SENSOR_SCAN        = MAKE_CMD(TYPE_ASYNC, 0x20)
-    NOITFY_SYNC_TIME          = MAKE_CMD(TYPE_ASYNC, 0x32)
-    NOTIFY_EVENT_LOG          = MAKE_CMD(TYPE_ASYNC, 0x35)
+    NOTIFY_SENSOR_ALARM = MAKE_CMD(TYPE_ASYNC, 0x19)
+    NOTIFY_SENSOR_SCAN = MAKE_CMD(TYPE_ASYNC, 0x20)
+    NOITFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
+    NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
 
-    def __init__(self, cmd, payload = bytes()):
+    def __init__(self, cmd, payload=bytes()):
         self._cmd = cmd
         if self._cmd == self.ASYNC_ACK:
             assert isinstance(payload, int)
@@ -83,14 +86,14 @@ class Packet(object):
     @property
     def Cmd(self):
         return self._cmd
-    
+
     @property
     def Payload(self):
         return self._payload
 
     def Send(self, fd):
         pkt = bytes()
-        
+
         pkt += struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
             pkt += struct.pack("BB", (self._payload & 0xFF), self._cmd & 0xFF)
@@ -125,10 +128,12 @@ class Packet(object):
             assert len(s) >= 7
             s = s[:7]
             payload = MAKE_CMD(cmd_type, b2)
-        else:
-            assert len(s) >= b2 + 4
+        elif len(s) >= b2 + 4:
             s = s[: b2 + 4]
             payload = s[5:-2]
+        else:
+            log.error("Invalid packet: %s", bytes_to_hex(s))
+            return None
 
         cs_remote = (s[-2] << 8) | s[-1]
         cs_local = checksum_from_bytes(s[:-2])
@@ -142,11 +147,11 @@ class Packet(object):
     @classmethod
     def GetVersion(cls):
         return cls(cls.CMD_GET_DONGLE_VERSION)
-    
+
     @classmethod
     def Inquiry(cls):
         return cls(cls.CMD_INQUIRY)
-    
+
     @classmethod
     def GetEnr(cls, r):
         assert isinstance(r, bytes)
@@ -156,7 +161,7 @@ class Packet(object):
     @classmethod
     def GetMAC(cls):
         return cls(cls.CMD_GET_MAC)
-        
+
     @classmethod
     def GetKey(cls):
         return cls(cls.CMD_GET_KEY)
@@ -187,7 +192,7 @@ class Packet(object):
         assert isinstance(mac, str)
         assert len(mac) == 8
         return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
-    
+
     @classmethod
     def GetSensorR1(cls, mac, r):
         assert isinstance(r, bytes)
@@ -219,13 +224,14 @@ class Packet(object):
         assert (cmd >> 0x8) == TYPE_ASYNC
         return cls(cls.ASYNC_ACK, cmd)
 
+
 class SensorEvent(object):
     def __init__(self, mac, timestamp, event_type, event_data):
         self.MAC = mac
         self.Timestamp = timestamp
         self.Type = event_type
         self.Data = event_data
-    
+
     def __str__(self):
         s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
         if self.Type == 'state':
@@ -233,6 +239,7 @@ class SensorEvent(object):
         else:
             s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
         return s
+
 
 class Dongle(object):
     _CMD_TIMEOUT = 2
@@ -248,7 +255,7 @@ class Dongle(object):
             return
 
         timestamp, event_type, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
-        timestamp = datetime.datetime.fromtimestamp(timestamp/1000.0)
+        timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
         sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
         if event_type == 0xA2:
@@ -258,9 +265,19 @@ class Dongle(object):
             elif alarm_data[0] == 0x02:
                 sensor_type = "motion"
                 sensor_state = "active" if alarm_data[5] == 1 else "inactive"
+            elif alarm_data[0] == 0x03:
+                sensor_type = "leak"
+                sensor_state = "wet" if alarm_data[5] == 1 else "dry"
             else:
-                sesor_type = "uknown"
+                sensor_type = "unknown"
                 sensor_state = "unknown"
+            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+        elif event_type == 0xE8:
+            if alarm_data[0] == 0x03:
+                # alarm_data[7] might be humidity in some form, but as an integer
+                # is reporting way to high to actually be humidity.
+                sensor_type = "leak:temperature"
+                sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
             e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
@@ -274,7 +291,7 @@ class Dongle(object):
         assert len(pkt.Payload) >= 9
         ts, msg_len = struct.unpack_from(">QB", pkt.Payload)
         # assert msg_len + 8 == len(pkt.Payload)
-        tm = datetime.datetime.fromtimestamp(ts/1000.0)
+        tm = datetime.datetime.fromtimestamp(ts / 1000.0)
         msg = pkt.Payload[9:]
         log.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
 
@@ -283,12 +300,12 @@ class Dongle(object):
         self.__fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
         self.__sensors = {}
         self.__exit_event = threading.Event()
-        self.__thread = threading.Thread(target = self._Worker)
+        self.__thread = threading.Thread(target=self._Worker)
         self.__on_event = event_handler
 
         self.__handlers = {
             Packet.NOITFY_SYNC_TIME: self._OnSyncTime,
-            Packet.NOTIFY_SENSOR_ALARM:  self._OnSensorAlarm,
+            Packet.NOTIFY_SENSOR_ALARM: self._OnSensorAlarm,
             Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
         }
 
@@ -310,7 +327,7 @@ class Dongle(object):
         if length > 0x3F:
             length = 0x3F
 
-        #log.debug("Raw HID packet: %s", bytes_to_hex(s))
+        # log.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
         return s[1: 1 + length]
 
@@ -332,9 +349,9 @@ class Dongle(object):
         log.debug("<=== Received: %s", str(pkt))
         with self.__lock:
             handler = self.__handlers.get(pkt.Cmd, self._DefaultHandler)
-        
+
         if (pkt.Cmd >> 8) == TYPE_ASYNC and pkt.Cmd != Packet.ASYNC_ACK:
-            #log.info("Sending ACK packet for cmd %04X", pkt.Cmd)
+            # log.info("Sending ACK packet for cmd %04X", pkt.Cmd)
             self._SendPacket(Packet.AsyncAck(pkt.Cmd))
         handler(pkt)
 
@@ -343,10 +360,10 @@ class Dongle(object):
         while True:
             if self.__exit_event.isSet():
                 break
-            
+
             s += self._ReadRawHID()
-            #if s:
-            #    log.info("Incoming buffer: %s", bytes_to_hex(s))
+            # if s:
+            #     log.info("Incoming buffer: %s", bytes_to_hex(s))
             start = s.find(b"\x55\xAA")
             if start == -1:
                 time.sleep(0.1)
@@ -374,7 +391,7 @@ class Dongle(object):
             raise TimeoutError("_DoCommand")
 
     def _DoSimpleCommand(self, pkt, timeout=_CMD_TIMEOUT):
-        ctx = self.CmdContext(result = None)
+        ctx = self.CmdContext(result=None)
 
         def cmd_handler(pkt, e):
             ctx.result = pkt
@@ -396,7 +413,7 @@ class Dongle(object):
     def _GetEnr(self, r):
         log.debug("Start GetEnr...")
         assert len(r) == 4
-        assert all(isinstance(x,  int) for x in r)
+        assert all(isinstance(x, int) for x in r)
         r_string = bytes(struct.pack("<LLLL", *r))
 
         resp = self._DoSimpleCommand(Packet.GetEnr(r_string))
@@ -411,14 +428,14 @@ class Dongle(object):
         mac = resp.Payload.decode('ascii')
         log.debug("GetMAC returns %s", mac)
         return mac
-    
+
     def _GetKey(self):
         log.debug("Start GetKey...")
         resp = self._DoSimpleCommand(Packet.GetKey())
         assert len(resp.Payload) == 16
         log.debug("GetKey returns %s", resp.Payload)
         return resp.Payload
-    
+
     def _GetVersion(self):
         log.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
@@ -510,15 +527,15 @@ class Dongle(object):
         log.debug("Start Scan...")
 
         ctx = self.CmdContext(evt=threading.Event(), result=None)
+
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
             ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
-        
+
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
         try:
             self._DoSimpleCommand(Packet.EnableScan())
-
 
             if ctx.evt.wait(timeout):
                 s_mac, s_type, s_ver = ctx.result
