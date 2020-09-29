@@ -1,8 +1,5 @@
 name: Publish Python distribution packages to PyPI and TestPyPI
-on:
-  push:
-    banches:
-      - release
+on: push
 
 jobs:
   build-n-publish:
@@ -10,8 +7,6 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@master
-      with:
-        ref: release
     - name: Set up Python 3.7
       uses: actions/setup-python@v1
       with:
