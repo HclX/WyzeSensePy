@@ -1,0 +1,35 @@
+name: Publish Python distribution packages to PyPI and TestPyPI
+on: push
+
+jobs:
+  build-n-publish:
+    name: Build and publish Python distribution packages to PyPI and TestPyPI
+    runs-on: ubuntu-18.04
+    steps:
+    - uses: actions/checkout@master
+    - name: Set up Python 3.7
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.7
+    - name: Install setuptools and wheel
+      run: >-
+        python3 -m
+        pip install
+        setuptools wheel
+        --user
+    - name: Build a binary wheel and a source tarball
+      run: >-
+        python3
+        setup.py sdist bdist_wheel
+    - name: Publish distribution packages to Test PyPI
+      uses: pypa/gh-action-pypi-publish@master
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_TEST_TOKEN }}
+        repository_url: https://test.pypi.org/legacy/
+    - name: Publish distribution packages to PyPI
+      if: startsWith(github.ref, 'refs/tags')
+      uses: pypa/gh-action-pypi-publish@master
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_TOKEN }}
